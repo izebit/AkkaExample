@@ -1,0 +1,26 @@
+apply plugin: 'java'
+
+sourceCompatibility = 1.8
+version = '1.0'
+repositories {
+    jcenter()
+}
+
+jar {
+    baseName = 'server'
+}
+task execute(type: JavaExec) {
+    main = 'ru.izebit.ApplicationLauncher'
+    classpath = sourceSets.main.runtimeClasspath
+}
+
+dependencies {
+    compile('com.typesafe.akka:akka-actor_2.11:2.3.13',
+            'com.typesafe:config:1.0.2',
+            'org.slf4j:slf4j-api:1.7.12',
+            'org.slf4j:slf4j-simple:1.6.4',
+            'com.typesafe.akka:akka-slf4j_2.11:2.3.13',
+            'com.carrotsearch:hppc:0.7.1',
+            'org.eclipse.jetty:jetty-client:9.3.4.RC0'
+    )
+}
