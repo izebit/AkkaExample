@@ -7,7 +7,7 @@ repositories {
 }
 
 jar {
-    baseName = 'server'
+    baseName = 'fileHandler'
 }
 task execute(type: JavaExec) {
     main = 'ru.izebit.ApplicationLauncher'
