@@ -24,4 +24,4 @@
 **modification-checker**, который вычитывает оставшиеся неиспользуемые товары из кеша и показывает их пользователю,с отметкой - *удаленные*.
 
 ## Схема
-![alt tag](https://raw.githubusercontent.com/izebit/AkkaExample/master/docs/diagram.svg)
+![alt tag](https://raw.githubusercontent.com/izebit/AkkaExample/master/docs/diagram.png)
