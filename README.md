@@ -25,3 +25,10 @@
 
 ## Схема
 ![alt tag](https://raw.githubusercontent.com/izebit/AkkaExample/master/docs/diagram.png)
+
+##Технологии
+* java se 8
+* framework akka
+* hppc (использование хештаблицы)
+* HOCON
+* gradle
