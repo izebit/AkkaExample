@@ -89,10 +89,11 @@ public class UrlChecker extends UntypedActor {
                 while (!urlCheckerSet.isEmpty()) {
                     TimeUnit.SECONDS.sleep(5);
                 }
+                TimeUnit.SECONDS.sleep(10);
+                getContext().system().shutdown();
             } finally {
                 lock.unlock();
             }
-            getContext().system().shutdown();
             System.exit(0);
 
         } else {
