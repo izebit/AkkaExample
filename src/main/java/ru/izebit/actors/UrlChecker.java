@@ -1,15 +1,20 @@
 package ru.izebit.actors;
 
 import akka.actor.ActorRef;
+import akka.actor.ActorSelection;
 import akka.actor.UntypedActor;
 import akka.event.Logging;
 import akka.event.LoggingAdapter;
 import org.eclipse.jetty.client.HttpClient;
 import org.eclipse.jetty.client.api.ContentResponse;
 import org.eclipse.jetty.http.HttpStatus;
+import ru.izebit.Offer;
 
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 
 import static ru.izebit.ApplicationLauncher.Commands;
 import static ru.izebit.ApplicationLauncher.Flags;
@@ -19,24 +24,25 @@ import static ru.izebit.ApplicationLauncher.Flags;
  * Проверка происходит следующим образом -
  * отправляется get запрос по адресу, если http код возрата не равен 2**, то страница не доступна.
  * <p/>
- * полученый результат он отправляет далее на обработку в формате
- * <идентификатор>:<цена>:<p - если ссылка недоступна, иначе не заполнено>
- * <p/>
  * Created by Artem Konovalov on 9/5/15.
  */
 public class UrlChecker extends UntypedActor {
     public static final String NAME = "url-checker";
     private final LoggingAdapter logger = Logging.getLogger(getContext().system(), this);
 
-    public static final int INSTANCE_COUNT = 20;
+    public static final int INSTANCE_COUNT = 200;
     //в миллисекундах
     public static final int CONNECTION_TIMEOUT = 30000;
 
-    private ActorRef consumer = getContext().system().actorFor("user/" + ModificationChecker.NAME);
+    private static final ReentrantLock lock = new ReentrantLock();
+    private static final Set<String> urlCheckerSet = Collections.newSetFromMap(new ConcurrentHashMap<String, Boolean>());
+
     private HttpClient client;
 
     @Override
     public void preStart() {
+        urlCheckerSet.add(getSelf().toString());
+
         client = new HttpClient();
         client.setConnectTimeout(CONNECTION_TIMEOUT);
         try {
@@ -46,29 +52,49 @@ public class UrlChecker extends UntypedActor {
         }
     }
 
+    @Override
+    public void postStop() {
+        urlCheckerSet.remove(getSelf().toString());
+    }
+
     public void onReceive(Object message) throws Exception {
-        if (message instanceof String) {
-            int index = ((String) message).lastIndexOf(FileReader.DELIMITER_SYMBOL);
-            String urlAddress = ((String) message).substring(index + 1);
+        if (lock.isLocked()) {
+            urlCheckerSet.remove(getSelf().toString());
+            return;
+        }
+
+        if (message instanceof Offer) {
+            Offer offer = (Offer) message;
 
             boolean isAvailable;
             try {
-                ContentResponse response = client.GET(urlAddress.replaceAll("[\\s]+","%20"));
+                ContentResponse response = client.GET(offer.getPictureURL().replaceAll("[\\s]+", "%20"));
                 isAvailable = HttpStatus.isSuccess(response.getStatus());
 
             } catch (Exception e) {
                 isAvailable = false;
             }
 
-            String msg = ((String) message).substring(0, index + 1);
             if (!isAvailable) {
-                msg = msg + Flags.PICTURE_IS_NOT_AVAILABLE;
-                System.out.println(urlAddress);
+                offer.setCheckResults(offer.getCheckResults() + Flags.PICTURE_IS_NOT_AVAILABLE);
             }
-            consumer.tell(msg, ActorRef.noSender());
+            System.out.println(offer);
+        } else if (message == Commands.FINISH_READ) {
+            lock.lock();
+            try {
+                urlCheckerSet.remove(getSelf().toString());
+                ActorSelection urlCheckers = getContext().system().actorSelection(
+                        "user/" + ModificationChecker.NAME + "/" + UrlChecker.NAME + "/*");
+                urlCheckers.tell(Commands.FINISH_READ, ActorRef.noSender());
+                while (!urlCheckerSet.isEmpty()) {
+                    TimeUnit.SECONDS.sleep(5);
+                }
+            } finally {
+                lock.unlock();
+            }
+            getContext().system().shutdown();
+            System.exit(0);
 
-        } else if (message instanceof Commands) {
-            consumer.tell(message, ActorRef.noSender());
         } else {
             unhandled(message);
         }

@@ -4,17 +4,22 @@ import akka.actor.ActorSystem;
 import ru.izebit.actors.FileReader;
 import ru.izebit.actors.ModificationChecker;
 
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
+
 /**
  * Стартовая точка
  * <p/>
  * Created by Artem Konovalov on 9/5/15.
  */
 public class ApplicationLauncher {
-    
+    static String path = "/Users/izebit/Documents/IdeaProjects/AkkaExample/src/test/resources/test.xml";
+
+
     public static void main(String[] args) throws Exception {
         ActorSystem actorSystem = ActorSystem.create("my-universe");
-        actorSystem.actorOf(FileReader.props(args[0]).withDispatcher("akka.actor.my-thread-pool-dispatcher"), FileReader.NAME);
-        actorSystem.actorOf(ModificationChecker.props(args[1]), ModificationChecker.NAME);
+        actorSystem.actorOf(FileReader.props(path).withDispatcher("akka.actor.my-thread-pool-dispatcher"), FileReader.NAME);
+        actorSystem.actorOf(ModificationChecker.props(path), ModificationChecker.NAME);
     }
 
     public static enum Commands {

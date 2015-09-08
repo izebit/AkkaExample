@@ -6,15 +6,21 @@ import akka.actor.UntypedActor;
 import akka.event.Logging;
 import akka.event.LoggingAdapter;
 import akka.japi.Creator;
+import akka.routing.RoundRobinPool;
 import com.carrotsearch.hppc.LongDoubleHashMap;
 import com.carrotsearch.hppc.LongDoubleMap;
 import com.carrotsearch.hppc.cursors.LongDoubleCursor;
 import ru.izebit.ApplicationLauncher;
+import ru.izebit.Offer;
 
+import javax.xml.bind.JAXBContext;
+import javax.xml.bind.Unmarshaller;
 import java.io.IOException;
+import java.io.StringReader;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.Iterator;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 import static ru.izebit.ApplicationLauncher.Commands;
@@ -31,13 +37,14 @@ public class ModificationChecker extends UntypedActor {
     public static final String NAME = "modification-checker";
     private LoggingAdapter logger = Logging.getLogger(getContext().system(), this);
 
-    private static final int INIT_CAPACITY = 13002000;
-
     private final String pathToOldFile;
-    private final LongDoubleMap prevPrices;
+    private final ActorRef urlChecker;
 
-    private int finishCompleteProducerCount = 0;
+    private final LongDoubleMap prevPriceCache;
+    private static final int INIT_CAPACITY = 13002000;
     private static final double REMOVED_ELEMENT = Double.NEGATIVE_INFINITY;
+
+    private long currentTime = -1;
 
     public static Props props(final String pathToOldFile) {
         return Props.create(new Creator<ModificationChecker>() {
@@ -52,26 +59,37 @@ public class ModificationChecker extends UntypedActor {
 
     public ModificationChecker(String pathToOldFile) {
         this.pathToOldFile = pathToOldFile;
-        this.prevPrices = new LongDoubleHashMap(INIT_CAPACITY);
+        this.prevPriceCache = new LongDoubleHashMap(INIT_CAPACITY);
+        this.urlChecker = getContext().actorOf(Props.create(UrlChecker.class)
+                .withRouter(new RoundRobinPool(UrlChecker.INSTANCE_COUNT))
+                .withMailbox("akka.actor.my-bounded-mailbox"), UrlChecker.NAME);
     }
 
     @Override
     public void preStart() throws Exception {
         super.preStart();
         try (Stream<String> lines = Files.lines(Paths.get(pathToOldFile))) {
-            boolean isNextIdentity = true;
-            String identity = null;
-
             Iterator<String> iterator = lines.iterator();
+
+            Unmarshaller unmarshaller = JAXBContext.newInstance(Offer.class).createUnmarshaller();
+            boolean isNextOpenTag = true;
+            StringBuilder context = null;
             while (iterator.hasNext()) {
                 String line = iterator.next();
-                if (isNextIdentity && line.startsWith(FileReader.ID_PREFIX)) {
-                    identity = line.substring(FileReader.ID_PREFIX.length(), line.indexOf("\"", FileReader.ID_PREFIX.length()));
-                    isNextIdentity = false;
-                } else if (line.startsWith(FileReader.PRICE_PREFIX)) {
-                    String price = line.substring(FileReader.PRICE_PREFIX.length(), line.indexOf("</", FileReader.PRICE_PREFIX.length()));
-                    prevPrices.put(Long.parseLong(identity), Double.parseDouble(price));
-                    isNextIdentity = true;
+                if (isNextOpenTag) {
+                    if (line.trim().startsWith(FileReader.OPEN_TAG)) {
+                        context = new StringBuilder();
+                        context.append(line);
+
+                        isNextOpenTag = false;
+                    }
+                } else {
+                    context.append(line);
+                    if (line.trim().startsWith(FileReader.CLOSE_TAG)) {
+                        Offer offer = (Offer) unmarshaller.unmarshal(new StringReader(context.toString()));
+                        prevPriceCache.put(offer.getId(), offer.getPrice());
+                        isNextOpenTag = true;
+                    }
                 }
             }
 
@@ -83,36 +101,31 @@ public class ModificationChecker extends UntypedActor {
     }
 
     public void onReceive(Object message) throws Exception {
-        if (message instanceof String) {
-            String msg = (String) message;
-            int index = msg.indexOf(FileReader.DELIMITER_SYMBOL);
-            long identity = Long.parseLong(msg.substring(0, index));
-            double price = Double.parseDouble(msg.substring(index + 1, index = msg.lastIndexOf(FileReader.DELIMITER_SYMBOL)));
+        if (message instanceof Offer) {
+            Offer offer = (Offer) message;
+            long id = offer.getId();
+            double price = offer.getPrice();
 
-            String flags = msg.substring(index + 1);
-            if (prevPrices.containsKey(identity)) {
-                if (Double.compare(prevPrices.get(identity), price) != 0) {
-                    flags += Flags.MODIFIED;
+            if (prevPriceCache.containsKey(id)) {
+                if (Double.compare(prevPriceCache.get(id), price) != 0) {
+                    offer.setCheckResults(offer.getCheckResults() + Flags.MODIFIED);
                 }
-                prevPrices.put(identity, REMOVED_ELEMENT);
+                prevPriceCache.put(id, REMOVED_ELEMENT);
             } else {
-                flags += Flags.CREATED;
+                offer.setCheckResults(offer.getCheckResults() + Flags.CREATED);
             }
-            System.out.println(identity + " " + flags);
+            urlChecker.tell(offer, ActorRef.noSender());
 
         } else if (message == Commands.FINISH_READ) {
-            finishCompleteProducerCount++;
-            if (finishCompleteProducerCount == UrlChecker.INSTANCE_COUNT) {
 
-                Iterator<LongDoubleCursor> iterator = prevPrices.iterator();
-                while (iterator.hasNext()) {
-                    LongDoubleCursor entry = iterator.next();
-                    if (entry.value == REMOVED_ELEMENT) {
-                        System.out.println(entry.key + " "+Flags.REMOVED);
-                    }
+            Iterator<LongDoubleCursor> iterator = prevPriceCache.iterator();
+            while (iterator.hasNext()) {
+                LongDoubleCursor entry = iterator.next();
+                if (entry.value == REMOVED_ELEMENT) {
+                    System.out.println(entry.key + " " + Flags.REMOVED);
                 }
-                getContext().system().shutdown();
             }
+            urlChecker.tell(Commands.FINISH_READ, ActorRef.noSender());
 
         } else {
             unhandled(message);
